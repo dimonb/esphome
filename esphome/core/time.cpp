@@ -3,11 +3,13 @@
 
 #include <cinttypes>
 
+#define IS_LEAP_YEAR(y) ((y) % 4 == 0 && ((y) % 100 != 0 || (y) % 400 == 0))
+
 namespace esphome {
 
 uint8_t days_in_month(uint8_t month, uint16_t year) {
   static const uint8_t DAYS_IN_MONTH[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-  if (month == 2 && (year % 4 == 0))
+  if (month == 2 && IS_LEAP_YEAR(year))
     return 29;
   return DAYS_IN_MONTH[month];
 }
@@ -136,7 +138,7 @@ void ESPTime::increment_second() {
     increment_time_value(this->month, 1, 13);
   }
 
-  uint16_t days_in_year = (this->year % 4 == 0) ? 366 : 365;
+  uint16_t days_in_year = IS_LEAP_YEAR(this->year) ? 366 : 365;
   if (increment_time_value(this->day_of_year, 1, days_in_year + 1)) {
     // day of year roll-over, increment year
     this->year++;
@@ -154,7 +156,7 @@ void ESPTime::increment_day() {
     increment_time_value(this->month, 1, 13);
   }
 
-  uint16_t days_in_year = (this->year % 4 == 0) ? 366 : 365;
+  uint16_t days_in_year = IS_LEAP_YEAR(this->year) ? 366 : 365;
   if (increment_time_value(this->day_of_year, 1, days_in_year + 1)) {
     // day of year roll-over, increment year
     this->year++;
@@ -169,7 +171,7 @@ void ESPTime::recalc_timestamp_utc(bool use_day_of_year) {
   }
 
   for (int i = 1970; i < this->year; i++)
-    res += (i % 4 == 0) ? 366 : 365;
+    res += IS_LEAP_YEAR(i) ? 366 : 365;
 
   if (use_day_of_year) {
     res += this->day_of_year - 1;
