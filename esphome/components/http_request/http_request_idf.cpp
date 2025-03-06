@@ -1,5 +1,4 @@
 #include "http_request_idf.h"
-
 #ifdef USE_ESP_IDF
 
 #include "esphome/components/network/util.h"
@@ -53,13 +52,13 @@ std::shared_ptr<HttpContainer> HttpRequestIDF::start(std::string url, std::strin
   bool secure = url.find("https:") != std::string::npos;
 
   esp_http_client_config_t config = {};
-
   config.url = url.c_str();
   config.method = method_idf;
   config.timeout_ms = this->timeout_;
   config.disable_auto_redirect = !this->follow_redirects_;
   config.max_redirection_count = this->redirect_limit_;
   config.auth_type = HTTP_AUTH_TYPE_BASIC;
+
 #if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
   if (secure) {
     config.crt_bundle_attach = esp_crt_bundle_attach;
@@ -80,7 +79,6 @@ std::shared_ptr<HttpContainer> HttpRequestIDF::start(std::string url, std::strin
 
   std::shared_ptr<HttpContainerIDF> container = std::make_shared<HttpContainerIDF>(client);
   container->set_parent(this);
-
   container->set_secure(secure);
 
   for (const auto &header : headers) {
@@ -119,11 +117,18 @@ std::shared_ptr<HttpContainer> HttpRequestIDF::start(std::string url, std::strin
     return nullptr;
   }
 
-  container->feed_wdt();
+  App.feed_wdt();
   container->content_length = esp_http_client_fetch_headers(client);
   container->feed_wdt();
   container->status_code = esp_http_client_get_status_code(client);
-  container->feed_wdt();
+
+  App.feed_wdt();
+
+  // Check for a chunked response where the content length could be 0 or negative
+  if (esp_http_client_is_chunked_response(client)) {
+    container->response_chunked = true;
+  }
+
   if (is_success(container->status_code)) {
     container->duration_ms = millis() - start;
     return container;
@@ -139,12 +144,14 @@ std::shared_ptr<HttpContainer> HttpRequestIDF::start(std::string url, std::strin
         esp_http_client_cleanup(client);
         return nullptr;
       }
+
 #if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_VERBOSE
       char redirect_url[256]{};
       if (esp_http_client_get_url(client, redirect_url, sizeof(redirect_url) - 1) == ESP_OK) {
         ESP_LOGV(TAG, "redirecting to url: %s", redirect_url);
       }
 #endif
+
       err = esp_http_client_open(client, 0);
       if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_http_client_open failed: %s", esp_err_to_name(err));
@@ -153,11 +160,18 @@ std::shared_ptr<HttpContainer> HttpRequestIDF::start(std::string url, std::strin
         return nullptr;
       }
 
-      container->feed_wdt();
+      App.feed_wdt();
       container->content_length = esp_http_client_fetch_headers(client);
       container->feed_wdt();
       container->status_code = esp_http_client_get_status_code(client);
-      container->feed_wdt();
+
+      App.feed_wdt();
+
+      // Check for a chunked response where the content length could be 0 or negative
+      if (esp_http_client_is_chunked_response(client)) {
+        container->response_chunked = true;
+      }
+
       if (is_success(container->status_code)) {
         container->duration_ms = millis() - start;
         return container;
@@ -180,32 +194,28 @@ int HttpContainerIDF::read(uint8_t *buf, size_t max_len) {
   const uint32_t start = millis();
   watchdog::WatchdogManager wdm(this->parent_->get_watchdog_timeout());
 
-  int bufsize = std::min(max_len, this->content_length - this->bytes_read_);
+  int max_chars_to_read = this->response_chunked ? max_len : std::min(max_len, this->content_length - this->bytes_read_);
 
-  if (bufsize == 0) {
+  if (max_chars_to_read == 0) {
     this->duration_ms += (millis() - start);
     return 0;
   }
 
-  this->feed_wdt();
-  int read_len = esp_http_client_read(this->client_, (char *) buf, bufsize);
-  this->feed_wdt();
+  App.feed_wdt();
+  int read_len = esp_http_client_read(this->client_, (char *) buf, max_chars_to_read);
   this->bytes_read_ += read_len;
 
   this->duration_ms += (millis() - start);
-
   return read_len;
 }
 
 void HttpContainerIDF::end() {
   watchdog::WatchdogManager wdm(this->parent_->get_watchdog_timeout());
-
   esp_http_client_close(this->client_);
   esp_http_client_cleanup(this->client_);
 }
 
 void HttpContainerIDF::feed_wdt() {
-  // Tests to see if the executing task has a watchdog timer attached
   if (esp_task_wdt_status(nullptr) == ESP_OK) {
     App.feed_wdt();
   }
@@ -215,3 +225,4 @@ void HttpContainerIDF::feed_wdt() {
 }  // namespace esphome
 
 #endif  // USE_ESP_IDF
+
